@@ -123,7 +123,7 @@ impl IOHIDDevice {
     {
         let max_input_report_len = self.get_i32_property(kIOHIDMaxInputReportSizeKey)? as usize;
 
-        let mut report_buffer = Arc::from(vec![0u8; max_input_report_len].into_boxed_slice());
+        let mut report_buffer: Arc<[u8], _> = Arc::from(vec![0u8; max_input_report_len].into_boxed_slice());
         let callback: InputReportCallback = Arc::new(callback);
         let callback = Arc::new(UnsafeCell::new(callback));
         unsafe {
