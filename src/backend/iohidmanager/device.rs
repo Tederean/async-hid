@@ -123,7 +123,8 @@ impl IOHIDDevice {
     {
         let max_input_report_len = self.get_i32_property(kIOHIDMaxInputReportSizeKey)? as usize;
 
-        let mut report_buffer: Arc<[u8], _> = Arc::from(vec![0u8; max_input_report_len].into_boxed_slice());
+        let mut report_buffer = vec![0u8; max_input_report_len];
+
         let callback: InputReportCallback = Arc::new(callback);
         let callback = Arc::new(UnsafeCell::new(callback));
         unsafe {
@@ -148,7 +149,7 @@ type InputReportCallback = Arc<dyn FnMut(&[u8]) + Send>;
 #[must_use = "The callback will be unregistered when the returned guard is dropped"]
 pub struct CallbackGuard {
     device: IOHIDDevice,
-    _report_buffer: Arc<[u8]>,
+    _report_buffer: Vec<u8>,
     _callback: Arc<UnsafeCell<InputReportCallback>>
 }
 
