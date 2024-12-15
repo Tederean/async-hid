@@ -1,8 +1,9 @@
-use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::mem::transmute;
+use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts;
+use std::sync::{Arc, Mutex};
 
 use core_foundation::base::{kCFAllocatorDefault, CFIndex, CFRelease, CFType, TCFType};
 use core_foundation::number::CFNumber;
@@ -118,20 +119,20 @@ impl IOHIDDevice {
 
     pub fn register_input_report_callback<F>(&self, callback: F) -> HidResult<CallbackGuard>
     where
-        F: FnMut(&[u8]) + Send + 'static
+        F: FnMut(&[u8]) + Send + Sync + 'static
     {
         let max_input_report_len = self.get_i32_property(kIOHIDMaxInputReportSizeKey)? as usize;
 
-        let mut report_buffer = vec![0u8; max_input_report_len].into_boxed_slice();
-        let callback: InputReportCallback = Box::new(callback);
-        let callback = Box::new(UnsafeCell::new(callback));
+        let mut report_buffer = vec![0u8; max_input_report_len];
+        let callback: InputReportCallback = Arc::new(Mutex::new(callback));
+        let callback = Arc::new(callback);
         unsafe {
             IOHIDDeviceRegisterInputReportCallback(
                 self.as_concrete_TypeRef(),
                 report_buffer.as_mut_ptr(),
                 report_buffer.len() as _,
                 hid_report_callback,
-                callback.get() as _
+                transmute::<&InputReportCallback, *mut InputReportCallback>(callback.deref()) as _
             );
         }
         Ok(CallbackGuard {
@@ -142,13 +143,13 @@ impl IOHIDDevice {
     }
 }
 
-type InputReportCallback = Box<dyn FnMut(&[u8]) + Send>;
+type InputReportCallback = Arc<Mutex<dyn FnMut(&[u8]) + Send + Sync>>;
 
 #[must_use = "The callback will be unregistered when the returned guard is dropped"]
 pub struct CallbackGuard {
     device: IOHIDDevice,
-    _report_buffer: Box<[u8]>,
-    _callback: Box<UnsafeCell<InputReportCallback>>
+    _report_buffer: Vec<u8>,
+    _callback: Arc<InputReportCallback>
 }
 
 impl Drop for CallbackGuard {
@@ -165,7 +166,14 @@ unsafe extern "C" fn hid_report_callback(
     context: *mut c_void, _result: IOReturn, _sender: *mut c_void, _report_type: IOHIDReportType, _report_id: u32, report: *mut u8,
     report_length: CFIndex
 ) {
-    let callback: &mut InputReportCallback = &mut *(context as *mut InputReportCallback);
+    let callback_lock: &InputReportCallback = &*(context as *mut InputReportCallback);
+
+    let mut callback = match callback_lock.lock() {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+
     let data = from_raw_parts(report, report_length as usize);
+
     callback(data);
 }
