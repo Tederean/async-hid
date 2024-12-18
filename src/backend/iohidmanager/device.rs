@@ -1,5 +1,6 @@
+use std::cell::UnsafeCell;
 use std::ffi::c_void;
-use std::mem::transmute;
+use std::mem::{ManuallyDrop, transmute};
 use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts;
@@ -123,33 +124,45 @@ impl IOHIDDevice {
     {
         let max_input_report_len = self.get_i32_property(kIOHIDMaxInputReportSizeKey)? as usize;
 
-        let mut report_buffer = vec![0u8; max_input_report_len];
+        let mut report_buffer = ManuallyDrop::new(vec![0u8; max_input_report_len]);
+
+        let (report_buffer_ptr, report_buffer_len, report_buffer_capacity) = (report_buffer.as_mut_ptr() as usize, report_buffer.len(), report_buffer.capacity());
+
+        drop(report_buffer);
+
         let callback: InputReportCallback = Arc::new(Mutex::new(callback));
-        let callback = Arc::new(callback);
+        let context: &InputReportCallbackInner = callback.deref();
+
         unsafe {
             IOHIDDeviceRegisterInputReportCallback(
                 self.as_concrete_TypeRef(),
-                report_buffer.as_mut_ptr(),
-                report_buffer.len() as _,
+                report_buffer_ptr as _,
+                report_buffer_len as _,
                 hid_report_callback,
-                transmute::<&InputReportCallback, *mut InputReportCallback>(callback.deref()) as _
+                context as _,
             );
         }
+
         Ok(CallbackGuard {
             device: self.clone(),
-            _report_buffer: report_buffer,
+            report_buffer_ptr,
+            report_buffer_len,
+            report_buffer_capacity,
             _callback: callback
         })
     }
 }
 
-type InputReportCallback = Arc<Mutex<dyn FnMut(&[u8]) + Send + Sync>>;
+type InputReportCallback = Arc<InputReportCallbackInner>;
+type InputReportCallbackInner = Mutex<dyn FnMut(&[u8]) + Send + Sync>;
 
 #[must_use = "The callback will be unregistered when the returned guard is dropped"]
 pub struct CallbackGuard {
     device: IOHIDDevice,
-    _report_buffer: Vec<u8>,
-    _callback: Arc<InputReportCallback>
+    report_buffer_ptr: usize,
+    report_buffer_len: usize,
+    report_buffer_capacity: usize,
+    _callback: InputReportCallback,
 }
 
 impl Drop for CallbackGuard {
@@ -159,6 +172,8 @@ impl Drop for CallbackGuard {
         unsafe {
             IOHIDDeviceRegisterInputReportCallback(self.device.as_concrete_TypeRef(), null_mut(), 0, transmute(null::<()>()), null_mut())
         }
+
+        drop(unsafe { Vec::from_raw_parts(self.report_buffer_ptr as _, self.report_buffer_len, self.report_buffer_capacity) });
     }
 }
 
@@ -166,9 +181,9 @@ unsafe extern "C" fn hid_report_callback(
     context: *mut c_void, _result: IOReturn, _sender: *mut c_void, _report_type: IOHIDReportType, _report_id: u32, report: *mut u8,
     report_length: CFIndex
 ) {
-    let callback_lock: &InputReportCallback = &*(context as *mut InputReportCallback);
+    let callback_mutex: &InputReportCallbackInner = &*(context as *mut InputReportCallbackInner);
 
-    let mut callback = match callback_lock.lock() {
+    let mut callback = match callback_mutex.lock() {
         Ok(x) => x,
         Err(_) => return,
     };
