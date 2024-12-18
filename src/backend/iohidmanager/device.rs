@@ -1,10 +1,8 @@
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::mem::{ManuallyDrop, transmute};
-use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts;
-use std::sync::{Arc, Mutex};
 
 use core_foundation::base::{kCFAllocatorDefault, CFIndex, CFRelease, CFType, TCFType};
 use core_foundation::number::CFNumber;
@@ -128,10 +126,9 @@ impl IOHIDDevice {
 
         let (report_buffer_ptr, report_buffer_len, report_buffer_capacity) = (report_buffer.as_mut_ptr() as usize, report_buffer.len(), report_buffer.capacity());
 
-        drop(report_buffer);
+        let callback: InputReportCallback = Box::new(Box::new(UnsafeCell::new(callback)));
 
-        let callback: InputReportCallback = Arc::new(Mutex::new(callback));
-        let context: &InputReportCallbackInner = callback.deref();
+        let callback_ptr = Box::into_raw(callback) as usize;
 
         unsafe {
             IOHIDDeviceRegisterInputReportCallback(
@@ -139,7 +136,7 @@ impl IOHIDDevice {
                 report_buffer_ptr as _,
                 report_buffer_len as _,
                 hid_report_callback,
-                context as _,
+                callback_ptr as _,
             );
         }
 
@@ -148,13 +145,13 @@ impl IOHIDDevice {
             report_buffer_ptr,
             report_buffer_len,
             report_buffer_capacity,
-            _callback: callback
+            callback_ptr,
         })
     }
 }
 
-type InputReportCallback = Arc<InputReportCallbackInner>;
-type InputReportCallbackInner = Mutex<dyn FnMut(&[u8]) + Send + Sync>;
+type InputReportCallback = Box<InputReportCallbackInner>;
+type InputReportCallbackInner = Box<UnsafeCell<dyn FnMut(&[u8]) + Send + Sync>>;
 
 #[must_use = "The callback will be unregistered when the returned guard is dropped"]
 pub struct CallbackGuard {
@@ -162,7 +159,7 @@ pub struct CallbackGuard {
     report_buffer_ptr: usize,
     report_buffer_len: usize,
     report_buffer_capacity: usize,
-    _callback: InputReportCallback,
+    callback_ptr: usize,
 }
 
 impl Drop for CallbackGuard {
@@ -173,7 +170,9 @@ impl Drop for CallbackGuard {
             IOHIDDeviceRegisterInputReportCallback(self.device.as_concrete_TypeRef(), null_mut(), 0, transmute(null::<()>()), null_mut())
         }
 
-        drop(unsafe { Vec::from_raw_parts(self.report_buffer_ptr as _, self.report_buffer_len, self.report_buffer_capacity) });
+        drop(unsafe { Vec::<u8>::from_raw_parts(self.report_buffer_ptr as _, self.report_buffer_len, self.report_buffer_capacity) });
+
+        drop(unsafe { InputReportCallback::from_raw(self.callback_ptr as _) });
     }
 }
 
@@ -181,14 +180,11 @@ unsafe extern "C" fn hid_report_callback(
     context: *mut c_void, _result: IOReturn, _sender: *mut c_void, _report_type: IOHIDReportType, _report_id: u32, report: *mut u8,
     report_length: CFIndex
 ) {
-    let callback_mutex: &InputReportCallbackInner = &*(context as *mut InputReportCallbackInner);
-
-    let mut callback = match callback_mutex.lock() {
-        Ok(x) => x,
-        Err(_) => return,
-    };
+    let callback: &InputReportCallbackInner = &*(context as *mut InputReportCallbackInner);
 
     let data = from_raw_parts(report, report_length as usize);
 
-    callback(data);
+    let callback_fn = &mut *(callback.get());
+
+    callback_fn(data);
 }
