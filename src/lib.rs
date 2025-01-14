@@ -30,6 +30,7 @@ pub struct DeviceInfo {
     /// The HID usage page
     pub usage_page: u16,
 
+    #[allow(dead_code)]
     pub(crate) private_data: BackendPrivateData,
 }
 
