@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use android_logger::Config;
 use futures_core::Stream;
 use log::LevelFilter;
-use crate::{AccessMode, DeviceInfo, ErrorSource, HidResult};
+use crate::{DeviceInfo, DeviceReader, DeviceWriter, ErrorSource, HidResult};
 
 pub async fn enumerate() -> HidResult<impl Stream<Item = DeviceInfo> + Unpin + Send> {
     android_logger::init_once(
@@ -22,29 +22,34 @@ pub async fn enumerate() -> HidResult<impl Stream<Item = DeviceInfo> + Unpin + S
     Ok(utils::iter(Vec::<DeviceInfo>::new()))
 }
 
-#[derive(Debug, Clone)]
-pub struct BackendDevice {
-}
-
-pub async fn open(_id: &BackendDeviceId, _mode: AccessMode) -> HidResult<BackendDevice> {
+pub async fn open_readonly(_device_info: &DeviceInfo) -> HidResult<DeviceReader> {
     todo!()
 }
 
-impl BackendDevice {
-    pub async fn read_input_report(&self, _buf: &mut [u8]) -> HidResult<usize> {
-        todo!()
-    }
+pub async fn open(_device_info: &DeviceInfo) -> HidResult<(DeviceReader, DeviceWriter)> {
+    todo!()
+}
 
-    pub async fn write_output_report(&self, _buf: &[u8]) -> HidResult<()> {
+#[derive(Debug)]
+pub struct BackendDeviceReader {
+}
+
+impl BackendDeviceReader {
+    pub async fn read_input_report(&self, _buffer: &mut [u8]) -> HidResult<usize> {
         todo!()
     }
 }
 
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
-pub struct BackendPrivateData {
+#[derive(Debug)]
+pub struct BackendDeviceWriter {
 }
 
-pub type BackendDeviceId = String;
+impl BackendDeviceWriter {
+    pub async fn write_output_report(&self, _buffer: &[u8]) -> HidResult<()> {
+        todo!()
+    }
+}
+
 pub type BackendError = JvmError;
 
 pub enum JvmError {
