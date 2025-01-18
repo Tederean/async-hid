@@ -6,6 +6,7 @@ mod error;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 
 use futures_core::Stream;
 
@@ -20,34 +21,69 @@ pub use crate::error::{ErrorSource, HidError, HidResult};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeviceInfo {
     pub(crate) name: String,
-    pub(crate) product_id: u16,
     pub(crate) vendor_id: u16,
-    pub(crate) usage_id: u16,
+    pub(crate) product_id: u16,
     pub(crate) usage_page: u16,
+    pub(crate) usage_id: u16,
 
     #[cfg(any(all(target_os = "windows", feature = "win32"), target_os = "macos", target_os = "linux"))]
     pub(crate) serial_number: Option<String>,
 
     #[cfg(target_os = "windows")]
-    pub(crate) handle: windows::core::HSTRING,
+    pub(crate) device_guid: backend::HashableHString,
 
     #[cfg(target_os = "macos")]
-    pub(crate) registry_entry_id: u64,
+    pub(crate) device_registry_entry_id: u64,
 
     #[cfg(target_os = "linux")]
-    pub(crate) path: std::path::PathBuf,
+    pub(crate) device_path: std::path::PathBuf,
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) js_hid_device: backend::HashableJsValue,
+    pub(crate) device_object: backend::HashableJsValue,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+static_assertions::assert_impl_all!(DeviceInfo: Send, Sync);
+
 impl DeviceInfo {
+    #[cfg(not(target_arch = "wasm32"))]
     /// Enumerates all **accessible** HID devices.
     ///
     /// If this library fails to retrieve the [DeviceInfo] of a device it will be automatically excluded.
     /// Register a `log` compatible logger at `trace` level for more information about the discarded devices.
+    ///
+    pub fn enumerate() -> impl Future<Output = HidResult<impl Stream<Item = DeviceInfo> + Unpin + Send>> {
+        backend::enumerate()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Enumerates all **accessible** HID devices.
+    ///
+    /// If this library fails to retrieve the [DeviceInfo] of a device it will be automatically excluded.
+    /// Register a `log` compatible logger at `trace` level for more information about the discarded devices.
+    ///
     pub fn enumerate() -> impl Future<Output = HidResult<impl Stream<Item = DeviceInfo> + Unpin>> {
         backend::enumerate()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Enumerates all **accessible** HID devices that matches **any** of the given criteria.
+    ///
+    /// If this library fails to retrieve the [DeviceInfo] of a device it will be automatically excluded.
+    /// Register a `log` compatible logger at `trace` level for more information about the discarded devices.
+    pub fn enumerate_with_criteria(
+        device_criteria: Vec<DeviceCriteria>,
+    ) -> impl Future<Output = HidResult<impl Stream<Item = DeviceInfo> + Unpin + Send>> {
+        backend::enumerate_with_criteria(device_criteria)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Enumerates all **accessible** HID devices that matches **any** of the given criteria.
+    ///
+    /// If this library fails to retrieve the [DeviceInfo] of a device it will be automatically excluded.
+    /// Register a `log` compatible logger at `trace` level for more information about the discarded devices.
+    pub fn enumerate_with_criteria(device_criteria: Vec<DeviceCriteria>) -> impl Future<Output = HidResult<impl Stream<Item = DeviceInfo> + Unpin>> {
+        backend::enumerate_with_criteria(device_criteria)
     }
 
     /// Opens the associated device in readonly mode.
@@ -95,31 +131,52 @@ impl DeviceInfo {
 
     #[cfg(target_os = "windows")]
     /// *(Windows only)* Handle identifier for device.
-    pub fn handle(&self) -> &windows::core::HSTRING {
-        &self.handle
+    pub fn device_guid(&self) -> &windows::core::HSTRING {
+        self.device_guid.deref()
     }
 
     #[cfg(target_os = "macos")]
     /// *(macOS only)* Registry entry identifier for device.
-    pub fn registry_entry_id(&self) -> u64 {
-        self.registry_entry_id
+    pub fn device_registry_entry_id(&self) -> u64 {
+        self.device_registry_entry_id
     }
 
     #[cfg(target_os = "linux")]
     /// *(Linux only)* File path to device.
-    pub fn path(&self) -> &std::path::Path {
-        self.path.as_path()
+    pub fn device_path(&self) -> &std::path::Path {
+        self.device_path.as_path()
     }
 
     #[cfg(target_arch = "wasm32")]
     /// *(Webassembly only)* JavaScript HidDevice object reference.
-    pub fn js_hid_device(&self) -> &backend::HashableJsValue {
-        &self.js_hid_device
+    pub fn device_object(&self) -> &wasm_bindgen::JsValue {
+        &self.device_object.deref()
     }
+}
 
-    /// Convenience method for easily finding a specific device
-    pub fn matches(&self, usage_page: u16, usage_id: u16, vendor_id: u16, product_id: u16) -> bool {
-        self.usage_page == usage_page && self.usage_id == usage_id && self.vendor_id == vendor_id && self.product_id == product_id
+/// Allows only certain HIDs to be listed during enumeration.
+///
+/// The device will be enumerated if all "Some" fields of a single DeviceCriteria struct are fulfilled.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceCriteria {
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+    pub usage_page: Option<u16>,
+    pub usage_id: Option<u16>,
+    #[cfg(any(all(target_os = "windows", feature = "win32"), target_os = "macos", target_os = "linux"))]
+    pub serial_number: Option<String>,
+}
+
+impl Default for DeviceCriteria {
+    fn default() -> Self {
+        DeviceCriteria {
+            vendor_id: None,
+            product_id: None,
+            usage_page: None,
+            usage_id: None,
+            #[cfg(any(all(target_os = "windows", feature = "win32"), target_os = "macos", target_os = "linux"))]
+            serial_number: None,
+        }
     }
 }
 
@@ -132,7 +189,17 @@ pub struct DeviceReader {
     pub(crate) device_info: DeviceInfo,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+static_assertions::assert_impl_all!(DeviceReader: Send, Sync);
+
 impl DeviceReader {
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Read an input report from this device.
+    pub fn read_input_report<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output = HidResult<usize>> + Send + 'a {
+        self.inner.read_input_report(buffer)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     /// Read an input report from this device.
     pub fn read_input_report<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output = HidResult<usize>> + 'a {
         self.inner.read_input_report(buffer)
@@ -168,7 +235,17 @@ pub struct DeviceWriter {
     pub(crate) device_info: DeviceInfo,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+static_assertions::assert_impl_all!(DeviceWriter: Send, Sync);
+
 impl DeviceWriter {
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Write an output report to this device.
+    pub fn write_output_report<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output = HidResult<()>> + Send + 'a {
+        self.inner.write_output_report(buffer)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     /// Write an output report to this device.
     pub fn write_output_report<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output = HidResult<()>> + 'a {
         self.inner.write_output_report(buffer)

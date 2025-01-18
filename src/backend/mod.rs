@@ -27,4 +27,4 @@ pub use iohidmanager::{enumerate, open, BackendDevice, BackendDeviceId, BackendE
 #[cfg(target_arch = "wasm32")]
 mod webhid;
 #[cfg(target_arch = "wasm32")]
-pub use webhid::{enumerate, open, open_readonly, BackendDeviceReader, BackendDeviceWriter, BackendError, HashableJsValue};
+pub use webhid::{BackendDeviceReader, BackendDeviceWriter, BackendError, HashableJsValue, enumerate, enumerate_with_criteria, open, open_readonly};
