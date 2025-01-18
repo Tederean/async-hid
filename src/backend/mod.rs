@@ -22,3 +22,9 @@ pub use hidraw::{enumerate, open, BackendDevice, BackendDeviceId, BackendError, 
 mod iohidmanager;
 #[cfg(target_os = "macos")]
 pub use iohidmanager::{enumerate, open, BackendDevice, BackendDeviceId, BackendError, BackendPrivateData};
+
+
+#[cfg(target_arch = "wasm32")]
+mod webhid;
+#[cfg(target_arch = "wasm32")]
+pub use webhid::{enumerate, open, open_readonly, BackendDeviceReader, BackendDeviceWriter, BackendError, HashableJsValue};
